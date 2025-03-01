@@ -1,0 +1,73 @@
+import android.view.MotionEvent
+import android.view.View
+import androidx.recyclerview.widget.RecyclerView
+
+/**
+ * 優化RV空白處和未設置點擊拖動問題
+ * 使用方法
+ * rv.addOnItemTouchListener(DraggableItemTouchListener())
+ */
+class DraggableItemTouchListener : RecyclerView.OnItemTouchListener {
+
+    private var childView: View? = null // 記錄觸摸的 itemView
+    private var isIntercepting = false // 是否正在攔截事件
+
+    override fun onInterceptTouchEvent(rv: RecyclerView, e: MotionEvent): Boolean {
+        when (e.action) {
+            MotionEvent.ACTION_DOWN -> {
+                //判斷是不是空白區塊，如果是null就代表是空白區塊
+                //如果沒有設置點擊會導致onStartNestedScroll觸發兩次，導致卡頓
+                childView = rv.findChildViewUnder(e.x, e.y)
+                if (childView == null || childView?.hasOnClickListeners() == false) {
+                    isIntercepting = true
+                    return true //空白區塊進行攔截，自己處理
+                }
+            }
+        }
+        return false //不攔截事件，讓 RecyclerView 處理
+    }
+
+    override fun onTouchEvent(rv: RecyclerView, e: MotionEvent) {
+        if (isIntercepting) {
+            val draggableNestedConstraintLayout = getDraggableNestedParent(rv)
+            if (draggableNestedConstraintLayout == null) {
+                isIntercepting = false
+                return
+            }
+            draggableNestedConstraintLayout.mockTouchEvent(e)
+//            如果是選擇觸發巢狀滾動可以用下面的程式碼，但是感覺直接把MotionEvent傳給parent比較絲滑
+//            when (e.action) {
+//                MotionEvent.ACTION_DOWN -> {
+//                    initialY = e.rawY
+//                    draggableNestedConstraintLayout.onNestedScrollAccepted(
+//                        rv, rv, ViewCompat.SCROLL_AXIS_VERTICAL, ViewCompat.TYPE_TOUCH
+//                    )
+//                }
+//                MotionEvent.ACTION_MOVE -> {
+//                    val deltaY = initialY - e.rawY
+//                    //模擬為消耗滾動
+//                    draggableNestedConstraintLayout.onNestedScroll(
+//                        rv, 0, 0, 0, deltaY.toInt(), ViewCompat.TYPE_TOUCH
+//                    )
+//                    initialY = e.rawY
+//                }
+//                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+//                    isIntercepting = false
+//                    draggableNestedConstraintLayout.onStopNestedScroll(
+//                        rv, ViewCompat.TYPE_TOUCH
+//                    )
+//                }
+//            }
+        }
+    }
+
+    override fun onRequestDisallowInterceptTouchEvent(disallowIntercept: Boolean) {
+
+    }
+
+    private fun getDraggableNestedParent(view: View?): DraggableNestedConstraintLayout? {
+        return generateSequence(view) { it.parent as? View }
+            .mapNotNull { it as? DraggableNestedConstraintLayout }
+            .firstOrNull()
+    }
+}
