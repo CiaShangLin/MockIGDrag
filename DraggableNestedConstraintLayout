@@ -1,0 +1,189 @@
+import android.content.Context
+import android.util.AttributeSet
+import android.view.MotionEvent
+import android.view.View
+import androidx.constraintlayout.widget.ConstraintLayout
+import androidx.core.view.NestedScrollingParent3
+import androidx.core.view.NestedScrollingParentHelper
+import androidx.core.view.ViewCompat
+
+/**
+ * 自定義可滾動的 ConstraintLayout，實現 NestedScrollingParent3，支援嵌套滾動與拖動關閉
+ * 外部使用不需要實作setOnTouchListener，直接setDraggableNestedListener即可
+ * 在RV上添加DraggableItemTouchListener可以優化空白處和未設置點擊item拖動優化
+ */
+class DraggableNestedConstraintLayout @JvmOverloads constructor(
+    context: Context, attrs: AttributeSet? = null,
+) : ConstraintLayout(context, attrs), NestedScrollingParent3, DragTouchConfig {
+
+    interface DraggableNestedListener {
+        /**
+         * 當佈局開始消費嵌套滾動時呼叫，會用在ViewPager2上，滑動的時候讓他不能左右
+         */
+        fun onNestedScrollConsumed()
+
+        /**
+         * 當嵌套滾動停止時呼叫，會用在ViewPager2上，停止的時候恢復左右
+         */
+        fun onNestedScrollStopped()
+
+        /**
+         * 拉下拉滾觸發自動收起
+         */
+        fun onAutoCloseCallback()
+    }
+
+    // 嵌套滾動輔助器，處理嵌套滾動相關邏輯
+    private val mNestedScrollHelper = NestedScrollingParentHelper(this)
+
+    // 處理觸控拖曳事件的監聽器
+    private val mDragTouchListener = DragTouchListener(object : DragTouchListener.Callback {
+        override fun autoCloseCallback() {
+            mDraggableNestedListener?.onAutoCloseCallback()
+        }
+    })
+
+    // 嵌套滾動狀態監聽器
+    private var mDraggableNestedListener: DraggableNestedListener? = null
+
+    //拖動最低高度
+    private var mDragMinVisibleHeight = 0f
+
+    init {
+        setOnTouchListener(mDragTouchListener)
+    }
+
+    /**
+     * 模擬觸摸操作，由RV空白處直接操作
+     */
+    fun mockTouchEvent(event: MotionEvent) {
+        mDragTouchListener.onTouch(this, event)
+    }
+
+    /**
+     * 設置嵌套滾動狀態監聽器，推薦使用setSimpleDraggableNestedListener
+     * @param listener 監聽嵌套滾動狀態的監聽器
+     */
+    fun setDraggableNestedListener(listener: DraggableNestedListener) {
+        mDraggableNestedListener = listener
+    }
+
+    /**
+     * 決定是否接受嵌套滾動
+     * @param child 直接子視圖
+     * @param target 發起嵌套滾動的目標視圖
+     * @param axes 滾動方向
+     * @param type 滾動類型
+     * @return 僅在垂直方向滾動時返回 true
+     */
+    override fun onStartNestedScroll(child: View, target: View, axes: Int, type: Int): Boolean {
+        return axes and ViewCompat.SCROLL_AXIS_VERTICAL != 0
+    }
+
+    /**
+     * 接受嵌套滾動時的回調
+     * 通知嵌套滾動輔助器處理相關邏輯
+     */
+    override fun onNestedScrollAccepted(child: View, target: View, axes: Int, type: Int) {
+        mNestedScrollHelper.onNestedScrollAccepted(child, target, axes, type)
+    }
+
+    /**
+     * 嵌套滾動停止時的回調
+     * 觸發動畫效果並通知監聽器
+     */
+    override fun onStopNestedScroll(target: View, type: Int) {
+        mNestedScrollHelper.onStopNestedScroll(target, type)
+        mDragTouchListener.animateFromOutsider(this)
+        mDraggableNestedListener?.onNestedScrollStopped()
+    }
+
+    /**
+     * 處理嵌套滾動
+     * 支援 NestedScrollingParent3 介面規範
+     */
+    override fun onNestedScroll(
+        target: View,
+        dxConsumed: Int,
+        dyConsumed: Int,
+        dxUnconsumed: Int,
+        dyUnconsumed: Int,
+        type: Int,
+        consumed: IntArray,
+    ) {
+        onNestedScroll(target, dxConsumed, dyConsumed, dxUnconsumed, dyUnconsumed, type)
+    }
+
+    /**
+     * 處理子視圖的嵌套滾動
+     * 當子視圖（如 RecyclerView）無法繼續滾動時，接管剩餘的滾動距離
+     */
+    override fun onNestedScroll(
+        target: View,
+        dxConsumed: Int,
+        dyConsumed: Int,
+        dxUnconsumed: Int,
+        dyUnconsumed: Int,
+        type: Int,
+    ) {
+        // 當目標視圖已滾動到頂部且存在未消耗的向下滾動距離時
+        if (!target.canScrollVertically(-1) && dyUnconsumed < 0) {
+            mDraggableNestedListener?.onNestedScrollConsumed()
+            // 直接調整視圖位置，不觸發拖曳監聽器，不會將MotionEvent交給TouchListener
+            val maxTranslationY = height - mDragMinVisibleHeight
+            translationY = (translationY - dyUnconsumed).coerceAtMost(maxTranslationY)
+        }
+    }
+
+    /**
+     * 預處理嵌套滾動
+     * 在此階段不消耗任何滾動距離，優先讓子視圖處理
+     */
+    override fun onNestedPreScroll(target: View, dx: Int, dy: Int, consumed: IntArray, type: Int) {
+        // 不進行預處理，保持空實現
+    }
+
+    override fun setResetPositionOnClose(enabled: Boolean) {
+        mDragTouchListener.setResetPositionOnClose(enabled)
+    }
+
+    override fun setClosePercent(percent: Float) {
+        mDragTouchListener.setClosePercent(percent)
+    }
+
+    override fun setDragMinVisibleHeight(setDragMinVisibleHeight: Float) {
+        mDragMinVisibleHeight = setDragMinVisibleHeight
+        mDragTouchListener.setDragMinVisibleHeight(setDragMinVisibleHeight)
+    }
+
+    override fun setCloseMinHeight(minHeight: Float) {
+        mDragTouchListener.setCloseMinHeight(minHeight)
+    }
+}
+
+/**
+ * 簡化設置可拖動巢狀佈局的監聽器
+ * @param onNestedScrollConsumed 開始消費巢狀滾動時的回調
+ * @param onNestedScrollStopped 巢狀滾動停止時的回調
+ * @param onAutoCloseCallback 自動收起時的回調
+ */
+inline fun DraggableNestedConstraintLayout.setSimpleDraggableNestedListener(
+    crossinline onNestedScrollConsumed: () -> Unit = {},
+    crossinline onNestedScrollStopped: () -> Unit = {},
+    crossinline onAutoCloseCallback: () -> Unit = {},
+) {
+    val listener = object : DraggableNestedConstraintLayout.DraggableNestedListener {
+        override fun onNestedScrollConsumed() {
+            onNestedScrollConsumed.invoke()
+        }
+
+        override fun onNestedScrollStopped() {
+            onNestedScrollStopped.invoke()
+        }
+
+        override fun onAutoCloseCallback() {
+            onAutoCloseCallback.invoke()
+        }
+    }
+    setDraggableNestedListener(listener)
+}
