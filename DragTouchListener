@@ -1,0 +1,177 @@
+import android.animation.ObjectAnimator
+import android.view.MotionEvent
+import android.view.View
+import androidx.annotation.FloatRange
+import androidx.core.animation.doOnEnd
+
+/**
+ * 觸摸移動監聽器，支援拖動視圖並在釋放時決定是否關閉或復位
+ * 直接對Layout實作setOnTouchListener即可
+ * root.setDragTouchListenerCallback(object :DragTouchListener.Callback{
+ *      override fun autoCloseCallback() {
+ *          dismiss()
+ * }})
+ */
+class DragTouchListener(private val mCallback: Callback?) : View.OnTouchListener, DragTouchConfig {
+
+    interface Callback {
+        fun autoCloseCallback()
+    }
+
+    private var startY = 0f       // 記錄手指按下時的 Y 軸位置
+
+    //執行完收起動畫之後需不需要還原到原先的Y，有些Dialog不是每次都是New出來的，所以dismiss只是隱藏
+    private var mResetPositionOnClose = true
+
+    //收起超過多少就自動收起，預設中間值
+    private var mClosePercent = 0.5f
+
+    //拖動過程中視圖的最小可見高度
+    private var mDragMinVisibleHeight = 0f
+
+    //關閉動畫結束時視圖的最小可見高度
+    private var mCloseMinHeight = 0f
+
+    //是否正在執行開啟動畫
+    private var mIsOpenAnimating = false
+
+    //是否正在執行關閉動畫
+    private var mIsCloseAnimating = false
+
+
+    override fun setResetPositionOnClose(enabled: Boolean) {
+        mResetPositionOnClose = enabled
+    }
+
+    override fun setClosePercent(percent: Float) {
+        mClosePercent = percent.coerceIn(0f, 1f)
+    }
+
+    override fun setDragMinVisibleHeight(setDragMinVisibleHeight: Float) {
+        mDragMinVisibleHeight = setDragMinVisibleHeight.coerceAtLeast(0f) // 避免負值
+    }
+
+    override fun setCloseMinHeight(minHeight: Float) {
+        mCloseMinHeight = minHeight.coerceAtLeast(0f)// 避免負值
+    }
+
+    override fun onTouch(view: View, event: MotionEvent): Boolean {
+        if (!view.isAttachedToWindow) {
+            return false
+        }
+        when (event.action) {
+            MotionEvent.ACTION_DOWN -> {
+                // 記錄初始位置與手指按下的 Y 軸座標
+                startY = event.rawY
+            }
+            MotionEvent.ACTION_MOVE -> {
+                // 計算 Y 軸位移量
+                val deltaY = event.rawY - startY
+                // 最大移動值限制
+                val maxTranslationY = view.height - mDragMinVisibleHeight
+                // 範圍0~maxTranslationY，沒有設置mMaxTranslationY的話就是最大到本身高度
+                view.translationY = deltaY.coerceIn(0f, maxTranslationY)
+            }
+            MotionEvent.ACTION_UP,
+            MotionEvent.ACTION_CANCEL -> {
+                // 根據拖動距離決定回彈或關閉
+                val draggedDistance = view.translationY
+                val closeThreshold = view.height * mClosePercent
+                if (draggedDistance >= closeThreshold) {
+                    // 拖動超過閾值，執行關閉動畫
+                    animateToBottomClose(view)
+                } else {
+                    // 未達閾值，回彈至初始位置
+                    animateToTopOpen(view)
+                }
+            }
+        }
+        return true
+    }
+
+    /**
+     * 根據當前視圖位置，決定執行關閉動畫或回彈動畫
+     */
+    fun animateFromOutsider(view: View) {
+        if (!view.isAttachedToWindow) {
+            return
+        }
+        val draggedDistance = view.translationY
+        val closeThreshold = view.height * mClosePercent
+        if (draggedDistance >= closeThreshold) {
+            animateToBottomClose(view)
+        } else {
+            animateToTopOpen(view)
+        }
+    }
+
+    /**
+     * 執行往下關閉的動畫，動畫結束後觸發自動關閉回調
+     */
+    private fun animateToBottomClose(view: View) {
+        if (mIsCloseAnimating) {
+            return
+        }
+        mIsCloseAnimating = true
+        //縮起來希望動畫到哪裡，預設本身高度，避免出現負數
+        val to = (view.height.toFloat() - mCloseMinHeight).coerceAtLeast(0f)
+        ObjectAnimator.ofFloat(view, "translationY", view.translationY, to)
+            .apply {
+                duration = 500
+                doOnEnd {
+                    if (mResetPositionOnClose) {
+                        view.translationY = 0f // 重置至初始偏移
+                    }
+                    mCallback?.autoCloseCallback()
+                    mIsCloseAnimating = false
+                }
+                start()
+            }
+    }
+
+    /**
+     * 執行回彈至原始位置的動畫
+     */
+    private fun animateToTopOpen(view: View) {
+        if (mIsOpenAnimating) {
+            return
+        }
+        mIsOpenAnimating = true
+        ObjectAnimator.ofFloat(view, "translationY", view.translationY, 0f).apply {
+            duration = 500
+            doOnEnd {
+                mIsOpenAnimating = false
+            }
+            start()
+        }
+    }
+}
+
+
+/**
+ * 拖動功能參數設置
+ */
+interface DragTouchConfig {
+
+    /**
+     * 設置收起動畫完畢時，還原到原先的Y值
+     */
+    fun setResetPositionOnClose(enabled: Boolean)
+
+    /**
+     * 設置收起比例
+     */
+    fun setClosePercent(@FloatRange(from = 0.0, to = 1.0) percent: Float)
+
+    /**
+     * 設置拖動過程中視圖的最小可見高度
+     * @param setDragMinVisibleHeight 拖動時保留在畫面上的最小高度
+     */
+    fun setDragMinVisibleHeight(setDragMinVisibleHeight: Float)
+
+    /**
+     * 設置關閉動畫結束時視圖的最小可見高度
+     * @param minHeight 動畫結束後保留在畫面上的最小高度
+     */
+    fun setCloseMinHeight(minHeight: Float)
+}
